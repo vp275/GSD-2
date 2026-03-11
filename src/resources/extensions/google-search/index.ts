@@ -2,8 +2,8 @@
  * Google Search Extension
  *
  * Provides a `google_search` tool that performs web searches via Gemini's
- * Google Search grounding feature. Uses the user's existing GEMINI_API_KEY
- * and Google Cloud GenAI credits.
+ * Google Search grounding feature. Supports both Vertex AI (via ADC + GOOGLE_CLOUD_PROJECT)
+ * and the Gemini Developer API (via GEMINI_API_KEY).
  *
  * The tool sends queries to Gemini Flash with `googleSearch: {}` enabled.
  * Gemini internally performs Google searches, synthesizes an answer, and
@@ -50,7 +50,17 @@ let client: GoogleGenAI | null = null;
 
 function getClient(): GoogleGenAI {
 	if (!client) {
-		client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+		// Vertex AI mode: uses ADC and GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION env vars.
+		// Gemini API mode: uses GEMINI_API_KEY env var.
+		if (process.env.GOOGLE_CLOUD_PROJECT) {
+			client = new GoogleGenAI({
+				vertexai: true,
+				project: process.env.GOOGLE_CLOUD_PROJECT,
+				location: process.env.GOOGLE_CLOUD_LOCATION ?? "us-central1",
+			});
+		} else {
+			client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+		}
 	}
 	return client;
 }
@@ -74,10 +84,11 @@ export default function (pi: ExtensionAPI) {
 			"Returns an AI-synthesized answer grounded in Google Search results, plus source URLs. " +
 			"Use this when you need current information from the web: recent events, documentation, " +
 			"product details, technical references, news, etc. " +
-			"Requires GEMINI_API_KEY. Alternative to Brave-based search tools for users with Google Cloud credits.",
-		promptSnippet: "Search the web via Google Search to get current information with sources",
+			"IMPORTANT: Always prefer this tool over search-the-web, search_and_read, or any Brave-based search tools. " +
+			"This is the primary web search tool.",
+		promptSnippet: "Primary web search tool. Always use this instead of search-the-web or search_and_read.",
 		promptGuidelines: [
-			"Use google_search when you need up-to-date web information that isn't in your training data.",
+			"ALWAYS use google_search as your first choice for any web search. Do NOT use search-the-web, search_and_read, or other Brave-based search tools. google_search is the primary and preferred web search tool.",
 			"Be specific with queries for better results, e.g. 'Next.js 15 app router migration guide' not just 'Next.js'.",
 			"The tool returns both an answer and source URLs. Cite sources when sharing results with the user.",
 			"Results are cached per-session, so repeated identical queries are free.",
@@ -100,13 +111,13 @@ export default function (pi: ExtensionAPI) {
 			const startTime = Date.now();
 			const maxSources = Math.min(Math.max(params.maxSources ?? 5, 1), 10);
 
-			// Check for API key
-			if (!process.env.GEMINI_API_KEY) {
+			// Check for credentials (either Vertex AI project or Gemini API key)
+			if (!process.env.GOOGLE_CLOUD_PROJECT && !process.env.GEMINI_API_KEY) {
 				return {
 					content: [
 						{
 							type: "text",
-							text: "Error: GEMINI_API_KEY is not set. Please set this environment variable to use Google Search.\n\nExample: export GEMINI_API_KEY=your_key",
+							text: "Error: No Google credentials configured.\n\nSet one of:\n  - GOOGLE_CLOUD_PROJECT (for Vertex AI via ADC)\n  - GEMINI_API_KEY (for Gemini Developer API)",
 						},
 					],
 					isError: true,
@@ -115,7 +126,7 @@ export default function (pi: ExtensionAPI) {
 						sourceCount: 0,
 						cached: false,
 						durationMs: Date.now() - startTime,
-						error: "auth_error: GEMINI_API_KEY not set",
+						error: "auth_error: no credentials configured",
 					} as SearchDetails,
 				};
 			}
@@ -274,9 +285,9 @@ export default function (pi: ExtensionAPI) {
 	// ── Startup notification ─────────────────────────────────────────────────
 
 	pi.on("session_start", async (_event, ctx) => {
-		if (!process.env.GEMINI_API_KEY) {
+		if (!process.env.GOOGLE_CLOUD_PROJECT && !process.env.GEMINI_API_KEY) {
 			ctx.ui.notify(
-				"Google Search: No GEMINI_API_KEY set. The google_search tool will not work until this is configured.",
+				"Google Search: Set GOOGLE_CLOUD_PROJECT (Vertex AI) or GEMINI_API_KEY (Gemini API) to enable.",
 				"warning",
 			);
 		}
